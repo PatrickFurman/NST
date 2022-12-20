@@ -5,5 +5,5 @@ Mask images/
 Architecture Training Images/
 TODO List for Image Style Transfer.txt
 .ipynb_checkpoints/
-_pycache_/
-'super resolution.ipynb'
+__pycache__/
+super resolution.ipynb
