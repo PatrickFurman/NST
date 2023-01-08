@@ -7,3 +7,4 @@ TODO List for Image Style Transfer.txt
 .ipynb_checkpoints/
 __pycache__/
 super resolution.ipynb
+*.ipynp
