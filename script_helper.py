@@ -2,6 +2,22 @@ from cProfile import run
 import wx
 import wx.lib.imagebrowser as ib
 import os
+from threading import *
+
+"""
+Worker thread to handle running the script while keeping UI responsive
+"""
+class ScriptThread(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        self.cancel = False
+        self.start()
+    
+    def run(self):
+        os.system(build_script_call(frm.script_args))
+    
+    def cancel(self):
+        self.cancel = True
 
 """
 Simple GUI to make it easier to run style_tranfer.py without having to do it through the console.
@@ -11,6 +27,9 @@ class ScriptHelperFrame(wx.Frame):
         super(ScriptHelperFrame, self).__init__(*args, **kw)
         # create a panel in the frame
         self.pnl = wx.Panel(self)
+
+        # No thread at start
+        self.worker = None
 
         # Dictionary storing args to give to script
         self.script_args = {
@@ -263,6 +282,8 @@ class ScriptHelperFrame(wx.Frame):
         wx.MessageBox("Current script call:\n" + build_script_call(self.script_args))
     
     def OnRun(self, event):
+        #self.worker = ScriptThread()
+        #self.worker.run()
         os.system(build_script_call(self.script_args))
 
 def build_script_call(args_dict):

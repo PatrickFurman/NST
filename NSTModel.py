@@ -24,14 +24,12 @@ class NSTModel(tf.keras.models.Model):
     # Takes an image as input, extracts style and content features
     def call(self, inputs):
         "Expects float input in [0,1]"
-        #inputs = inputs*255.0
-        #preprocessed_input = tf.keras.applications.vgg19.preprocess_input(inputs)
+        inputs = tf.keras.applications.vgg19.preprocess_input(inputs*255)
         preprocessed_input = tf.reshape(inputs, (1, self.image_dim[0], self.image_dim[1], self.image_dim[2]))
         outputs = self.model(preprocessed_input)
         style_outputs, content_outputs = (outputs[:self.num_style_layers],
                                         outputs[self.num_style_layers:])
-        #style_outputs = [tf.reshape(output, (output.shape[1]*output.shape[2], output.shape[3]))
-        #                 for output in style_outputs]
+        
         content_outputs = [tf.reshape(output, (output.shape[1]*output.shape[2], output.shape[3]))
                         for output in content_outputs]
 

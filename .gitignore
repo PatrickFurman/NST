@@ -8,3 +8,4 @@ TODO List for Image Style Transfer.txt
 __pycache__/
 super resolution.ipynb
 *.ipynp
+*.bat

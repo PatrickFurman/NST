@@ -7,6 +7,8 @@ from NSTModel import NSTModel
 import time
 import argparse
 import cv2
+import os
+import imageio
 
 def require_args(parser):
     content_layer_choices = ["block2_conv2", "block3_conv2", "block4_conv2", "block5_conv2"]
@@ -55,7 +57,7 @@ def train_step(image):
         outputs = extractor(image)
         loss = extractor.total_loss(content_targets, style_targets, outputs)
         loss += total_variation_weight*tf.image.total_variation(image)
-        grad = tf.clip_by_norm(tape.gradient(loss, image), 255)
+        grad = tf.clip_by_norm(tape.gradient(loss, image), 1)
         opt.apply_gradients([(grad, image)])
     #image.assign(util.scale_image(image))
     image.assign(tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=1.0))
@@ -66,6 +68,7 @@ def optimize(image):
     start = time.time()
     loss_list = []
     diff_list = []
+    image_list = [util.rgb_to_bgr(image)]
     step = 0
 
     # Main optimization loop
@@ -73,11 +76,19 @@ def optimize(image):
         step += 1
         l = train_step(image)
         print(".", end='', flush=True)
-        if step % steps_per_epoch == 0:
+        if step % steps_per_epoch == 0: # epoch completed
+            # Update losses
             loss_list.append(l)
             loss_diff = l - loss_list[len(loss_list)-2]
             diff_list.append(loss_diff)
-            print("Train step: %d   Total Loss %d   Change in Loss %d"%(step, l, loss_diff))
+            # ETA
+            eta = np.round((time.time()-start)*(max_steps-step)/step, 2)
+            # Print losses and estimated time remaining
+            print("Train step: %d   Total Loss %s   Change in Loss %s   Estimated Time Remaining %f second(s)"%(step, "{:,}".format(int(l)), "{:,}".format(int(loss_diff)), eta))
+            print("LR: %f"%opt.learning_rate(step))
+            # Save in-progress image to array to use in making GIF at end
+            #image_list.append(np.array(image*255, dtype=np.uint8))
+            image_list.append(util.rgb_to_bgr(image))
 
     end = time.time()
     print("Total time: {:.1f}".format(end-start))
@@ -91,14 +102,40 @@ def optimize(image):
             image = tf.where(mask_image!=255, image, content_image)
 
     # Converting to BGR color space to save image
-    r, g, b = cv2.split(np.array(image*255, dtype=np.uint8))
-    bgr_stylized = cv2.merge((b, g, r))
-    return bgr_stylized
+    bgr_stylized = np.array(image*255, dtype=np.uint8) #util.rgb_to_bgr(image)
+    return bgr_stylized, image_list
+
+def transfer_color(content_image, gen_image, method=1):
+    if method == 1:
+        image = util.scale_image(tf.Variable(tf.cast(tf.convert_to_tensor(gen_image),
+                                                            dtype=tf.float32), trainable=True))
+        # Extract luminance channel from stylized image
+        yiq_image = tf.image.rgb_to_yiq(image)
+        y_image = tf.split(yiq_image, yiq_image.shape[2], 2)[0]
+
+        # Extract iq channels from original content image
+        yiq_content = tf.image.rgb_to_yiq(content_image)
+        iq_content = tf.split(yiq_content, yiq_content.shape[2], 2)[1:]
+
+        # Combine luminance from stylized image with color from content
+        yiq_new = tf.concat([y_image, iq_content[0], iq_content[1]], axis=2)
+        rgb_new = tf.image.yiq_to_rgb(yiq_new)
+
+        # Save newly colored image
+        rgb_new = np.array(rgb_new*255, dtype=np.uint8)
+        r, g, b = cv2.split(rgb_new)
+        output_image_original_color =  cv2.merge((b, g, r))
+    elif method == 2:
+        output_image_original_color = gen_image
+    return output_image_original_color
 
 if __name__ == "__main__":
     args = require_args(argparse.ArgumentParser(
         description='Program that uses gradient descent to generate a new image that attempts to jointly optimize ' +
          'similarilty to a provide style image\'s style and a content image\'s content'))
+
+    # Use luminance transfer (True) or color matching (False)
+    post_color_preserve = False
 
     # Image paths
     style_image_path = args['style_image_path']
@@ -108,14 +145,17 @@ if __name__ == "__main__":
         # Transform mask to only trues and falses
         # White areas become false unless inverting
         # False means that the style will not be transferred to that section of the picture
-        b, g, r = cv2.split(cv2.imread(mask_path))
-        mask_image = cv2.merge((r, g, b))
+        #b, g, r = cv2.split(cv2.imread(mask_path))
+        #mask_image = cv2.merge((r, g, b))
+        mask_image = cv2.imread(mask_path)
 
     # RGB Images
-    b, g, r = cv2.split(cv2.imread(style_image_path))
-    style_image = cv2.merge((r, g, b))
-    b, g, r = cv2.split(cv2.imread(content_image_path))
-    content_image = cv2.merge((r, g, b))
+    #b, g, r = cv2.split(cv2.imread(style_image_path))
+    #style_image = cv2.merge((r, g, b))
+    style_image = cv2.imread(style_image_path)
+    #b, g, r = cv2.split(cv2.imread(content_image_path))
+    #content_image = cv2.merge((r, g, b))
+    content_image = cv2.imread(content_image_path)
 
     # Rescaling content image dimensions if it's too large for the program to run
     max_size = args['max_size'] # Largest number of pixels for longest side of image
@@ -135,12 +175,26 @@ if __name__ == "__main__":
     content_image_dimensions = content_image.shape
     style_image = np.array(tf.image.resize(style_image, content_image_dimensions[:2]), dtype=np.uint8)
 
+    # Applying color adjustment if necessary (pre-transfer adjustment to style image via color histogram matching)
+    if args['color_preserve'] and not post_color_preserve:
+        mu_s = [np.mean(style_image[:,:,0]), np.mean(style_image[:,:,1]), np.mean(style_image[:,:,2])]
+        mu_c = [np.mean(content_image[:,:,0]), np.mean(content_image[:,:,1]), np.mean(content_image[:,:,2])]
+        sigma_c = util.get_cov_mat(content_image)
+        sigma_s = util.get_cov_mat(style_image)
+        A = np.matmul(util.sigma_calc(sigma_c, 0.5), util.sigma_calc(sigma_s, -0.5))
+        b = mu_c - np.matmul(A, mu_s)
+        style_image = np.apply_along_axis(lambda x: np.matmul(A, x) + b, 2, style_image)
+
     # Preprocessing input images
     white_noise = np.random.uniform(size=content_image_dimensions)
     style_image = util.scale_image(tf.Variable(tf.cast(tf.convert_to_tensor(style_image),
                                                        dtype=tf.float32), trainable=True))
     content_image = util.scale_image(tf.Variable(tf.cast(tf.convert_to_tensor(content_image),
                                                          dtype=tf.float32), trainable=True))
+    #style_image = tf.keras.applications.vgg19.preprocess_input(tf.Variable(tf.cast(tf.convert_to_tensor(style_image),
+    #                                                   dtype=tf.float32), trainable=True))
+    #content_image = tf.keras.applications.vgg19.preprocess_input(tf.Variable(tf.cast(tf.convert_to_tensor(content_image),
+    #                                                     dtype=tf.float32), trainable=True))
     image = tf.Variable(tf.cast(tf.convert_to_tensor(white_noise), dtype=tf.float32), trainable=True)
 
     # Select starting image
@@ -162,7 +216,7 @@ if __name__ == "__main__":
 
     # How much to weight style, content, and variation
     ratio = args['ratio']
-    content_weight = 20
+    content_weight = 1
     style_weight = content_weight / ratio
     total_variation_weight = args['total_variation_weight']
 
@@ -178,43 +232,33 @@ if __name__ == "__main__":
     model = VGG19(include_top = False, pooling = args['pooling'], input_shape = content_image_dimensions)
     model.load_weights('vgg19_norm_weights.h5')
     extractor = NSTModel(s_layers, c_layers, style_weight, content_weight, model, content_image_dimensions)
-    opt = tf.optimizers.Adam(learning_rate=0.001, epsilon=0.1)
+    #opt = tf.optimizers.Adam(learning_rate=0.001, epsilon=0.1)
+    lr = tf.keras.optimizers.schedules.PiecewiseConstantDecay([1500, 2500, 5000, 7500], [0.008, 0.005, 0.001, 0.0005, 0.0001])
+    opt = tf.optimizers.Adamax(learning_rate=lr)
 
     # Passing style and content images through network to get target features
     style_targets = extractor(style_image)['style']
     content_targets = extractor(content_image)['content']
 
     # Creating new image
-    output_image = optimize(image)
+    output_image, output_list = optimize(image)
 
-    # Applying color adjustment if necessary
-    if args['color_preserve']:
-        image = util.scale_image(tf.Variable(tf.cast(tf.convert_to_tensor(output_image),
-                                                         dtype=tf.float32), trainable=True))
-        # Extract luminance channel from stylized image
-        yiq_image = tf.image.rgb_to_yiq(image)
-        y_image = tf.split(yiq_image, yiq_image.shape[2], 2)[0]
-
-        # Extract iq channels from original content image
-        yiq_content = tf.image.rgb_to_yiq(content_image)
-        iq_content = tf.split(yiq_content, yiq_content.shape[2], 2)[1:]
-
-        # Combine luminance from stylized image with color from content
-        yiq_new = tf.concat([y_image, iq_content[0], iq_content[1]], axis=2)
-        rgb_new = tf.image.yiq_to_rgb(yiq_new)
-
-        # Save newly colored image
-        rgb_new = np.array(rgb_new*255, dtype=np.uint8)
-        r, g, b = cv2.split(rgb_new)
-        output_image_original_color =  cv2.merge((b, g, r))
+    # Applying color adjustment if necessary (post-transfer adjustment to output image via luminance transfer)
+    if args['color_preserve'] and post_color_preserve:
+        output_image_original_color =  transfer_color(content_image, output_image, method=1)
 
     # Save stylized image along with additional recolored/upscaled version(s) if necessary
     cv2.imwrite(args['output_image_path'], output_image)
     if args['upscale']:
+        os.system("rmdir /s /q \"C:\\Users\\Patrick\\AppData\\Local\\Temp\\tfhub_modules\\\"")
         upscale.upscale_image(args['output_image_path'])
-    if args['color_preserve']:
+    if args['color_preserve'] and post_color_preserve:
         new_path = args['output_image_path'][:-4] # remove '.jpg'
         new_path = new_path + " recolored.jpg"
         cv2.imwrite(new_path, output_image_original_color)
         if args['upscale']:
+            os.system("rmdir /s /q \"C:\\Users\\Patrick\\AppData\\Local\\Temp\\tfhub_modules\\\"")
             upscale.upscale_image(new_path)
+
+    # Save GIF
+    imageio.mimwrite(args['output_image_path'][0:-4] + ".gif", output_list, format=".gif", fps=5)

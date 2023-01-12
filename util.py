@@ -30,6 +30,11 @@ def remerge(y_gen, rgb_content):
     rgb_gen = tf.image.yiq_to_rgb(yiq_gen)
     return rgb_gen
 
+def sigma_calc(m, pow):
+    e_vals, e_vecs = np.linalg.eigh(m)
+    res = np.matmul(np.matmul(e_vecs, np.diag(e_vals**pow)), np.transpose(e_vecs))
+    return res
+
 def gram_matrix(input, shift=True):
     if len(input.shape) == 4:
         input = input[0]
@@ -37,6 +42,11 @@ def gram_matrix(input, shift=True):
         input = input-1
     result = tf.matmul(input, input, transpose_a=True)
     return result #/ input.shape[0]
+
+def style_target_gen(input):
+    if len(input.shape) == 4:
+        input = input[0]
+    return input
 
 # Takes a color image, separates it by its channels and then uses min-max scaling on the values
 # within each channel independently to scale between 0 and 1
@@ -56,6 +66,24 @@ def deprocess(image):
     imagenet_mean = [0.40760392,  0.45795686,  0.48501961]
     image = (tf.transpose(image, [1,2,0])/255. + imagenet_mean)[:,:,::-1]
     return tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=1.0)
+
+# Go from 0-1 to 0-255 and from RGB to BGR
+def rgb_to_bgr(image):
+    r, g, b = cv2.split(np.array(image*255, dtype=np.uint8))
+    bgr_stylized = cv2.merge((b, g, r))
+    return bgr_stylized
+
+def get_cov_mat(image):
+    r_var = np.var(image[:,:,0])
+    g_var = np.var(image[:,:,1])
+    b_var = np.var(image[:,:,2])
+    rg_cov = np.mean(np.cov(image[:,:,0], image[:,:,1]))
+    rb_cov = np.mean(np.cov(image[:,:,0], image[:,:,2]))
+    gb_cov = np.mean(np.cov(image[:,:,1], image[:,:,2]))
+    cov_mat = np.array([[r_var, rg_cov, rb_cov],
+                        [rg_cov, g_var, gb_cov],
+                        [rb_cov, gb_cov, b_var]])
+    return cov_mat
 
 # Gradient should be the same shape as input images (after being resized if needed)
 # Mask should be a 2D tensor with same width and height as gradient but only one channel and contain only 1's and 0's
