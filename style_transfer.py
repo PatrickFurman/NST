@@ -87,7 +87,6 @@ def optimize(image):
             print("Train step: %d   Total Loss %s   Change in Loss %s   Estimated Time Remaining %f second(s)"%(step, "{:,}".format(int(l)), "{:,}".format(int(loss_diff)), eta))
             print("LR: %f"%opt.learning_rate(step))
             # Save in-progress image to array to use in making GIF at end
-            #image_list.append(np.array(image*255, dtype=np.uint8))
             image_list.append(util.rgb_to_bgr(image))
 
     end = time.time()
@@ -145,16 +144,10 @@ if __name__ == "__main__":
         # Transform mask to only trues and falses
         # White areas become false unless inverting
         # False means that the style will not be transferred to that section of the picture
-        #b, g, r = cv2.split(cv2.imread(mask_path))
-        #mask_image = cv2.merge((r, g, b))
         mask_image = cv2.imread(mask_path)
 
-    # RGB Images
-    #b, g, r = cv2.split(cv2.imread(style_image_path))
-    #style_image = cv2.merge((r, g, b))
+    # Read in images
     style_image = cv2.imread(style_image_path)
-    #b, g, r = cv2.split(cv2.imread(content_image_path))
-    #content_image = cv2.merge((r, g, b))
     content_image = cv2.imread(content_image_path)
 
     # Rescaling content image dimensions if it's too large for the program to run
@@ -191,10 +184,6 @@ if __name__ == "__main__":
                                                        dtype=tf.float32), trainable=True))
     content_image = util.scale_image(tf.Variable(tf.cast(tf.convert_to_tensor(content_image),
                                                          dtype=tf.float32), trainable=True))
-    #style_image = tf.keras.applications.vgg19.preprocess_input(tf.Variable(tf.cast(tf.convert_to_tensor(style_image),
-    #                                                   dtype=tf.float32), trainable=True))
-    #content_image = tf.keras.applications.vgg19.preprocess_input(tf.Variable(tf.cast(tf.convert_to_tensor(content_image),
-    #                                                     dtype=tf.float32), trainable=True))
     image = tf.Variable(tf.cast(tf.convert_to_tensor(white_noise), dtype=tf.float32), trainable=True)
 
     # Select starting image
@@ -232,7 +221,6 @@ if __name__ == "__main__":
     model = VGG19(include_top = False, pooling = args['pooling'], input_shape = content_image_dimensions)
     model.load_weights('vgg19_norm_weights.h5')
     extractor = NSTModel(s_layers, c_layers, style_weight, content_weight, model, content_image_dimensions)
-    #opt = tf.optimizers.Adam(learning_rate=0.001, epsilon=0.1)
     lr = tf.keras.optimizers.schedules.PiecewiseConstantDecay([1500, 2500, 5000, 7500], [0.008, 0.005, 0.001, 0.0005, 0.0001])
     opt = tf.optimizers.Adamax(learning_rate=lr)
 
